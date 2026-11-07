@@ -36,4 +36,24 @@ public class IdentifiersTests
 
         Assert.Equal(first, second);
     }
+    [Fact]
+public void IssueRequestId_EmptyGuid_Rejects()
+{
+    Assert.Throws<ArgumentException>(() =>
+        new IssueRequestId(Guid.Empty));
+}
+
+[Fact]
+public void ToolId_EmptyGuid_Rejects()
+{
+    Assert.Throws<ArgumentException>(() =>
+        new ToolId(Guid.Empty));
+}
+
+[Fact]
+public void ExecutorId_EmptyGuid_Rejects()
+{
+    Assert.Throws<ArgumentException>(() =>
+        new ExecutorId(Guid.Empty));
+}
 }
