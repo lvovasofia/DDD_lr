@@ -3,7 +3,7 @@ using Application.Domain.Model.ValueObjects;
 
 namespace Application.Domain.Model.Entities;
 
-public sealed class IssueRequest
+public sealed partial class IssueRequest
 {
     private readonly List<ToolId> _items = new();
     private readonly List<string> _events = new();

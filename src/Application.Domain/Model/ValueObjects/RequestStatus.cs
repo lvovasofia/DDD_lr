@@ -9,5 +9,7 @@ public enum RequestStatus
     Issued,
     PartiallyReturned,
     Returned,
-    Closed
+    Closed,
+    Rejected
+
 }
