@@ -9,7 +9,7 @@ public sealed class MemorySession : IIssueRequestRepository, IUnitOfWork
     private readonly Dictionary<IssueRequestId, (IssueRequestState State, long Revision)>
         _rows = new();
     private readonly List<(IssueRequestState State, long Expected)> _staged = new();
-
+    public bool FailNextSave { get; set; }
     public MemorySession(params IssueRequest[] initial)
     {
         foreach (var r in initial)
@@ -34,7 +34,14 @@ public sealed class MemorySession : IIssueRequestRepository, IUnitOfWork
     public Task SaveChangesAsync()
     {
         try
-        {
+             {
+                if (FailNextSave)
+                {
+                    FailNextSave = false;
+
+                    throw new InvalidOperationException(
+                           "Імітована технічна помилка збереження.");
+                }
             foreach (var item in _staged)
                 if (RevisionOf(item.State.Id) != item.Expected)
                     throw new InvalidOperationException(
