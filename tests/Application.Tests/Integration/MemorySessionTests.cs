@@ -91,4 +91,66 @@ public class MemorySessionTests
         var current = await session.FindAsync(original.Id);
         Assert.Equal(2, current!.Revision);
     }
+    private async Task ApproveAndSave(MemorySession session, IssueRequest original)
+    {
+        var loaded = (await session.FindAsync(original.Id))!;
+
+        loaded.Aggregate.ApproveForIssue(
+            Storekeeper, Confirmations(loaded.Aggregate), Now);
+
+        session.Stage(loaded.Aggregate, loaded.Revision);
+        await session.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task FailedSave_DoesNotPersistApproval()
+    {
+        var original = Submitted();
+        var session = new MemorySession(original)
+        {
+            FailNextSave = true
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => ApproveAndSave(session, original));
+
+        var saved = (await session.FindAsync(original.Id))!;
+
+        Assert.Null(saved.Aggregate.Approval);
+    }
+
+    [Fact]
+    public async Task FailedSave_Retry_PersistsApprovalOnce()
+    {
+        var original = Submitted();
+        var session = new MemorySession(original)
+        {
+            FailNextSave = true
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => ApproveAndSave(session, original));
+
+        await ApproveAndSave(session, original);
+
+        var saved = (await session.FindAsync(original.Id))!;
+
+        Assert.Equal(2, saved.Revision);
+    }
+
+    [Fact]
+    public async Task RestoredApprovedRequest_EmitsRequestIssued()
+    {
+        var original = Submitted();
+        var session = new MemorySession(original);
+
+        await ApproveAndSave(session, original);
+
+        var restored = (await session.FindAsync(original.Id))!;
+
+        restored.Aggregate.ConfirmIssued(
+            Storekeeper, Now.AddMinutes(5));
+
+        Assert.Contains("RequestIssued", restored.Aggregate.Events);
+    }
 }
