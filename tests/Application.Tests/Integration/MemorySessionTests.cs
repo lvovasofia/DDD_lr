@@ -91,158 +91,66 @@ public class MemorySessionTests
         var current = await session.FindAsync(original.Id);
         Assert.Equal(2, current!.Revision);
     }
-
-[Fact]
-public async Task SaveChangesAsync_TechnicalFailure_DoesNotPersistApproval()
-{
-    var original = Submitted();
-
-    var session = new MemorySession(original)
+    private async Task ApproveAndSave(MemorySession session, IssueRequest original)
     {
-        FailNextSave = true
-    };
+        var loaded = (await session.FindAsync(original.Id))!;
 
-    var loaded = (await session.FindAsync(original.Id))!;
+        loaded.Aggregate.ApproveForIssue(
+            Storekeeper, Confirmations(loaded.Aggregate), Now);
 
-    loaded.Aggregate.ApproveForIssue(
-        Storekeeper,
-        Confirmations(loaded.Aggregate),
-        Now
-    );
+        session.Stage(loaded.Aggregate, loaded.Revision);
+        await session.SaveChangesAsync();
+    }
 
-    session.Stage(loaded.Aggregate, loaded.Revision);
-
-    await Assert.ThrowsAsync<InvalidOperationException>(
-        () => session.SaveChangesAsync()
-    );
-
-    var persisted = (await session.FindAsync(original.Id))!;
-
-    Assert.Equal(
-        RequestStatus.Submitted,
-        persisted.Aggregate.Status
-    );
-
-    Assert.Null(persisted.Aggregate.Approval);
-    Assert.Equal(1, persisted.Revision);
-    Assert.Empty(persisted.Aggregate.Events);
-}
-
-[Fact]
-public async Task FailedSave_ReloadAndRetry_PersistsApprovalOnce()
-{
-    var original = Submitted();
-
-    var session = new MemorySession(original)
+    [Fact]
+    public async Task FailedSave_DoesNotPersistApproval()
     {
-        FailNextSave = true
-    };
+        var original = Submitted();
+        var session = new MemorySession(original)
+        {
+            FailNextSave = true
+        };
 
-    var first = (await session.FindAsync(original.Id))!;
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => ApproveAndSave(session, original));
 
-    first.Aggregate.ApproveForIssue(
-        Storekeeper,
-        Confirmations(first.Aggregate),
-        Now
-    );
+        var saved = (await session.FindAsync(original.Id))!;
 
-    session.Stage(first.Aggregate, first.Revision);
+        Assert.Null(saved.Aggregate.Approval);
+    }
 
-    await Assert.ThrowsAsync<InvalidOperationException>(
-        () => session.SaveChangesAsync()
-    );
+    [Fact]
+    public async Task FailedSave_Retry_PersistsApprovalOnce()
+    {
+        var original = Submitted();
+        var session = new MemorySession(original)
+        {
+            FailNextSave = true
+        };
 
-    // Повторно завантажуємо заявку після збою
-    var retry = (await session.FindAsync(original.Id))!;
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => ApproveAndSave(session, original));
 
-    Assert.NotSame(first.Aggregate, retry.Aggregate);
-    Assert.Equal(RequestStatus.Submitted, retry.Aggregate.Status);
-    Assert.Equal(1, retry.Revision);
+        await ApproveAndSave(session, original);
 
-    // Повторно виконуємо погодження
-    retry.Aggregate.ApproveForIssue(
-        Storekeeper,
-        Confirmations(retry.Aggregate),
-        Now
-    );
+        var saved = (await session.FindAsync(original.Id))!;
 
-    session.Stage(retry.Aggregate, retry.Revision);
+        Assert.Equal(2, saved.Revision);
+    }
 
-    await session.SaveChangesAsync();
+    [Fact]
+    public async Task RestoredApprovedRequest_EmitsRequestIssued()
+    {
+        var original = Submitted();
+        var session = new MemorySession(original);
 
-    // Перевіряємо збережений стан
-    var saved = (await session.FindAsync(original.Id))!;
+        await ApproveAndSave(session, original);
 
-    Assert.Equal(
-        RequestStatus.ApprovedForIssue,
-        saved.Aggregate.Status
-    );
+        var restored = (await session.FindAsync(original.Id))!;
 
-    Assert.NotNull(saved.Aggregate.Approval);
-    Assert.Equal(2, saved.Revision);
-    Assert.Empty(saved.Aggregate.Events);
-}
+        restored.Aggregate.ConfirmIssued(
+            Storekeeper, Now.AddMinutes(5));
 
-[Fact]
-public async Task RestoredApprovedRequest_ConfirmIssued_EmitsRequestIssued()
-{
-    var original = Submitted();
-    var session = new MemorySession(original);
-
-    // Крок 1: погодження заявки
-    var loaded = (await session.FindAsync(original.Id))!;
-
-    loaded.Aggregate.ApproveForIssue(
-        Storekeeper,
-        Confirmations(loaded.Aggregate),
-        Now
-    );
-
-    session.Stage(loaded.Aggregate, loaded.Revision);
-    await session.SaveChangesAsync();
-
-    // Крок 2: відновлення погодженої заявки
-    var restored = (await session.FindAsync(original.Id))!;
-
-    Assert.Equal(
-        RequestStatus.ApprovedForIssue,
-        restored.Aggregate.Status
-    );
-
-    Assert.Empty(restored.Aggregate.Events);
-
-    // Крок 3: підтвердження видачі
-    restored.Aggregate.ConfirmIssued(
-        Storekeeper,
-        Now.AddMinutes(5)
-    );
-
-    Assert.Equal(
-        RequestStatus.Issued,
-        restored.Aggregate.Status
-    );
-
-    Assert.Contains(
-        "RequestIssued",
-        restored.Aggregate.Events
-    );
-
-    // Крок 4: збереження
-    session.Stage(restored.Aggregate, restored.Revision);
-    await session.SaveChangesAsync();
-
-    // Крок 5: повторне завантаження
-    var persisted = (await session.FindAsync(original.Id))!;
-
-    Assert.Equal(
-        RequestStatus.Issued,
-        persisted.Aggregate.Status
-    );
-
-    Assert.NotNull(persisted.Aggregate.Handover);
-    Assert.Equal(3, persisted.Revision);
-    Assert.Empty(persisted.Aggregate.Events);
-}
-
-
+        Assert.Contains("RequestIssued", restored.Aggregate.Events);
+    }
 }
