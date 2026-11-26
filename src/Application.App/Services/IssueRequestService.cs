@@ -29,11 +29,29 @@ public sealed class IssueRequestService
 
         var confirmations = await _facts.GetConfirmationsAsync(loaded.Aggregate);
 
-        // предметне рішення: правила перевіряє агрегат, не служба
+
         loaded.Aggregate.ApproveForIssue(
             _actor.Storekeeper, confirmations, _clock.Now);
 
         _repository.Stage(loaded.Aggregate, loaded.Revision);
-        await _unitOfWork.SaveChangesAsync();   // після цього рядка можна повідомляти про успіх
+        await _unitOfWork.SaveChangesAsync();
+    }
+
+    public async Task ApplyIssueConfirmedAsync<TMessage>(
+        string json,
+        Func<string, DateTimeOffset, TMessage> parser,
+        Func<TMessage, IssueRequestId> requestId,
+        Func<TMessage, IssueIssuedFact> mapper)
+    {
+        var message = parser(json, _clock.Now);
+
+        var loaded = await _repository.FindAsync(requestId(message))
+                     ?? throw new InvalidOperationException("Заявку не знайдено.");
+
+        var fact = mapper(message);
+        loaded.Aggregate.ConfirmIssued(fact.Storekeeper, fact.IssuedAt);
+
+        _repository.Stage(loaded.Aggregate, loaded.Revision);
+        await _unitOfWork.SaveChangesAsync();
     }
 }
