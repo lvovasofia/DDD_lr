@@ -91,6 +91,28 @@ public class MemorySessionTests
         var current = await session.FindAsync(original.Id);
         Assert.Equal(2, current!.Revision);
     }
+
+    [Fact]
+    public async Task Saved_ApprovalIsPreserved()
+    {
+        // Arrange
+        var original = Submitted();
+        var session = new MemorySession(original);
+        var loaded = await session.FindAsync(original.Id);
+        var request = loaded!.Aggregate;
+
+        // Act
+        request.ApproveForIssue(Storekeeper, Confirmations(request), Now);
+        session.Stage(request, loaded.Revision);
+        await session.SaveChangesAsync();
+        var reloaded = await session.FindAsync(original.Id);
+
+        // Assert
+        var approval = reloaded!.Aggregate.Approval;
+        Assert.NotNull(approval);
+        Assert.Equal(Storekeeper, approval!.ApprovedBy);
+        Assert.Equal(Now, approval.ApprovedAt);
+    }
     private async Task ApproveAndSave(MemorySession session, IssueRequest original)
     {
         var loaded = (await session.FindAsync(original.Id))!;
