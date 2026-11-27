@@ -37,14 +37,15 @@ public sealed class IssueOrderTests
 
         Assert.Null(order.Pending);
     }
+[Fact]
+public void Acknowledge_WrongId_Throws()
+{
+    var order = new IssueOrder(Guid.NewGuid(), Guid.NewGuid());
+    order.ConfirmIssue(DateTimeOffset.UtcNow);
 
-    [Fact]
-    public void Acknowledge_WrongId_Throws()
-    {
-        var order = new IssueOrder(Guid.NewGuid(), Guid.NewGuid());
-        order.ConfirmIssue(DateTimeOffset.UtcNow);
+    Assert.Throws<InvalidOperationException>(
+        () => order.Acknowledge(Guid.Empty));
 
-        Assert.Throws<InvalidOperationException>(
-            () => order.Acknowledge(Guid.Empty));
-    }
+    Assert.NotNull(order.Pending);
+}
 }
