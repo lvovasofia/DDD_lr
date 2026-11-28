@@ -1,9 +1,12 @@
-﻿using System.Text.Json;
-using Application.App.Ports;
+﻿using Application.App.Ports;
 using Application.App.Services;
 using Application.Domain.Model.Entities;
 using Application.Domain.Model.ValueObjects;
 using Application.Infrastructure.Persistence;
+using Application.Integration.Contracts;
+using Application.Integration.Translation;
+using Application.Integration.Validation;
+using Warehouse;
 using Xunit;
 
 namespace Application.Tests.Integration;
@@ -13,13 +16,12 @@ public class IssueConfirmedApplyTests
     private static readonly DateTimeOffset Now =
         new(2026, 11, 10, 8, 0, 0, TimeSpan.Zero);
 
+    private static readonly DateTimeOffset IssuedAt = Now.AddHours(1);
+
     private static readonly UsagePeriod Period =
         new(Now.AddHours(1), Now.AddDays(2));
 
     private static readonly StorekeeperId Storekeeper = new(Guid.NewGuid());
-
-    private sealed record IssueConfirmedV1(
-        Guid MessageId, Guid RequestId, Guid StorekeeperId, DateTimeOffset IssuedAtUtc);
 
     private sealed class FixedClock(DateTimeOffset now) : IClock
     {
@@ -64,28 +66,30 @@ public class IssueConfirmedApplyTests
         return r;
     }
 
-    private static IssueConfirmedV1 Parse(string json, DateTimeOffset now) =>
-        JsonSerializer.Deserialize<IssueConfirmedV1>(json)!;
+    private static IssueOrder Sent(IssueRequest request)
+    {
+        var order = new IssueOrder(request.Id.Value, Storekeeper.Value);
+        order.ConfirmIssue(IssuedAt);
+        return order;
+    }
 
     private static IssueRequestService Service(MemorySession session) =>
-        new(session, session, new FixedActor(), new FixedClock(Now), new NoFacts());
+        new(session, session, new FixedActor(), new FixedClock(Now.AddHours(2)), new NoFacts());
 
-    private static Task Apply(IssueRequestService service, IssueConfirmedV1 message) =>
+    private static Task Apply(IssueRequestService service, string json) =>
         service.ApplyIssueConfirmedAsync<IssueConfirmedV1>(
-            JsonSerializer.Serialize(message),
-            Parse,
-            m => new IssueRequestId(m.RequestId),
-            m => new IssueIssuedFact(new StorekeeperId(m.StorekeeperId), m.IssuedAtUtc));
+            json,
+            IssueConfirmedContract.Parse,
+            IssueConfirmedTranslator.RequestIdOf,
+            IssueConfirmedTranslator.ToLocal);
 
     [Fact]
     public async Task ApprovedRequest_BecomesIssued_AndSavesOnce()
     {
         var request = Approved();
         var session = new MemorySession(request);
-        var message = new IssueConfirmedV1(
-            Guid.NewGuid(), request.Id.Value, Storekeeper.Value, Now.AddHours(1));
 
-        await Apply(Service(session), message);
+        await Apply(Service(session), Sent(request).PendingJson());
 
         var saved = await session.FindAsync(request.Id);
         Assert.Equal(RequestStatus.Issued, saved!.Aggregate.Status);
@@ -97,14 +101,29 @@ public class IssueConfirmedApplyTests
     {
         var request = Submitted();
         var session = new MemorySession(request);
-        var message = new IssueConfirmedV1(
-            Guid.NewGuid(), request.Id.Value, Storekeeper.Value, Now.AddHours(1));
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => Apply(Service(session), message));
+            () => Apply(Service(session), Sent(request).PendingJson()));
 
         var saved = await session.FindAsync(request.Id);
         Assert.Equal(RequestStatus.Submitted, saved!.Aggregate.Status);
         Assert.Equal(1, saved.Revision);
+    }
+
+    [Fact]
+    public async Task SenderMessage_IsAppliedToRequest_ThenAcknowledged()
+    {
+        var request = Approved();
+        var session = new MemorySession(request);
+        var order = Sent(request);
+
+        await Apply(Service(session), order.PendingJson());
+        order.Acknowledge(order.Pending!.MessageId);
+
+        var saved = await session.FindAsync(request.Id);
+        Assert.Equal(RequestStatus.Issued, saved!.Aggregate.Status);
+        Assert.Equal(Storekeeper, saved.Aggregate.Handover!.IssuedBy);
+        Assert.Equal(IssuedAt, saved.Aggregate.Handover.IssuedAt);
+        Assert.Null(order.Pending);
     }
 }
